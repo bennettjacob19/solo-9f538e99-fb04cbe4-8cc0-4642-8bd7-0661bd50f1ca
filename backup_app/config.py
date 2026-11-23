@@ -20,6 +20,7 @@ class Config:
     rotation_interval: float
     rotation_batch: int
     max_content_length: int
+    recovery_chunk_size: int
 
 
 def config_from_env() -> Config:
@@ -33,4 +34,5 @@ def config_from_env() -> Config:
         rotation_interval=float(os.environ.get("ROTATION_INTERVAL", "1")),
         rotation_batch=int(os.environ.get("ROTATION_BATCH", "10")),
         max_content_length=int(os.environ.get("MAX_UPLOAD_MB", "16")) * 1024 * 1024,
+        recovery_chunk_size=int(os.environ.get("RECOVERY_CHUNK_KB", "256")) * 1024,
     )

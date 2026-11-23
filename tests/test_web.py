@@ -25,6 +25,7 @@ def make_config(base: str) -> Config:
         rotation_interval=0.05,
         rotation_batch=2,
         max_content_length=1024 * 1024,
+        recovery_chunk_size=64 * 1024,
     )
 
 

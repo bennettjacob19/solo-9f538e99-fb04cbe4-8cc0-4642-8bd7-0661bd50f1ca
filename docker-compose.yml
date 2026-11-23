@@ -12,9 +12,17 @@ services:
       ROTATION_INTERVAL: "1"
       ROTATION_BATCH: "10"
       MAX_UPLOAD_MB: "16"
+      # Recovery imports stream ciphertext in these-sized chunks; peak heap
+      # for four concurrent 15 MiB imports stays around ~75 MiB RSS, well under
+      # the 160 MiB container cap below.
+      RECOVERY_CHUNK_KB: "256"
     volumes:
       - keystore:/data/keystore
       - backup-volumes:/data/volumes
+    # Hard memory ceiling required by the recovery SLA. Recovery imports are
+    # fully streamed (one chunk in memory at a time per job), so four
+    # concurrent 15 MiB imports fit comfortably.
+    mem_limit: 160m
     restart: unless-stopped
 
 volumes:

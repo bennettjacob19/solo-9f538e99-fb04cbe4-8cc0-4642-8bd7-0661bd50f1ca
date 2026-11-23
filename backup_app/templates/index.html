@@ -91,6 +91,53 @@
   </div>
 
   <div class="card">
+    <h2>灾难恢复：导入恢复凭据（密钥卷重建后）</h2>
+    <form action="{{ url_for('recovery_imports') }}" method="post" enctype="multipart/form-data">
+      <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:center">
+        <input type="file" name="credential" required>
+        <label class="muted">保护口令
+          <input type="password" name="passphrase" required style="margin-left:6px">
+        </label>
+        <button class="btn primary" type="submit">上传凭据并导入</button>
+      </div>
+    </form>
+    <div class="hint">
+      凭据经口令加密，只含该备份的数据密钥与必要元数据，不含任何主密钥。导入时后台只顺序读一遍原卷密文，
+      同时完成 GCM 认证与原文摘要核对；校验通过后按原编号、原文件名登记，并用登记时的活动主密钥重新包装数据密钥。
+      原卷密文保持不变，失败不会改动任何现有登记。
+    </div>
+    {% if recovery_jobs %}
+    <table style="margin-top:14px" id="recovery-job-table">
+      <thead><tr><th>任务</th><th>原备份编号</th><th>文件名</th><th>状态/进度</th><th>说明</th></tr></thead>
+      <tbody id="recovery-job-rows">
+      {% for j in recovery_jobs %}
+        <tr data-job-id="{{ j.id }}">
+          <td><code>{{ j.id[:8] }}…</code></td>
+          <td><code>{{ (j.backup_id or '—')[:8] }}…</code></td>
+          <td>{{ j.filename or '—' }}</td>
+          <td class="job-state">
+            {% if j.status == 'running' %}
+              <span class="pill running">导入中</span>
+              {% if j.paused %}<span class="pill" style="background:rgba(251,191,36,.15);color:var(--warn)">已暂停</span>{% endif %}
+              <div class="bar"><i class="job-bar" style="width:{% if j.total_bytes %}{{ (j.read_bytes / j.total_bytes * 100) | round(1) }}{% else %}0{% endif %}%"></i></div>
+              <span class="muted job-progress">{{ j.read_bytes }} / {{ j.total_bytes }} 字节</span>
+            {% elif j.status == 'completed' %}
+              <span class="pill completed">{% if j.idempotent %}幂等重传{% else %}已恢复登记{% endif %}</span>
+            {% elif j.status == 'conflict' %}
+              <span class="pill" style="background:rgba(248,113,113,.15);color:var(--err)">编号冲突</span>
+            {% else %}
+              <span class="pill" style="background:rgba(248,113,113,.15);color:var(--err)">失败</span>
+            {% endif %}
+          </td>
+          <td class="muted job-error">{{ j.error or ('登记编号 ' ~ (j.registered_id[:8] if j.registered_id else '—') ~ '…') }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+
+  <div class="card">
     <h2>主密钥（KEK）</h2>
     <table>
       <thead><tr><th>密钥 ID</th><th>状态</th><th>创建时间</th><th>可解包的备份数</th><th>操作</th></tr></thead>
@@ -136,7 +183,15 @@
             {% for kid in b.kek_ids %}<code>{{ kid[:8] }}…</code>{% if not loop.last %}<br>{% endif %}{% endfor %}
           </td>
           <td>
-            <a class="btn" href="{{ url_for('download', backup_id=b.id) }}">下载还原</a>
+            <div class="row-actions">
+              <a class="btn" href="{{ url_for('download', backup_id=b.id) }}">下载还原</a>
+              <form action="{{ url_for('export_credential', backup_id=b.id) }}" method="post"
+                    class="inline"
+                    onsubmit="var p=prompt('为恢复凭据设置一个保护口令（导入时需再次输入）：'); if(!p){return false;} this.elements['passphrase'].value=p;">
+                <input type="hidden" name="passphrase" value="">
+                <button class="btn" type="submit">下载恢复凭据</button>
+              </form>
+            </div>
           </td>
         </tr>
       {% endfor %}
@@ -147,5 +202,45 @@
     {% endif %}
   </div>
 </div>
+<script>
+(function () {
+  const rows = document.querySelectorAll('#recovery-job-rows tr[data-job-id]');
+  if (!rows.length) return;
+  const running = new Set(
+    Array.from(rows).filter(r => r.querySelector('.pill.running'))
+                    .map(r => r.getAttribute('data-job-id'))
+  );
+  if (!running.size) return;
+
+  async function poll() {
+    let anyRunning = false;
+    for (const jobId of running) {
+      try {
+        const resp = await fetch('/recovery/imports/' + jobId);
+        if (!resp.ok) continue;
+        const job = await resp.json();
+        if (job.status === 'running') {
+          anyRunning = true;
+          const row = document.querySelector('tr[data-job-id="' + jobId + '"]');
+          if (row) {
+            const pct = job.total_bytes ? (job.read_bytes / job.total_bytes * 100).toFixed(1) : 0;
+            const bar = row.querySelector('.job-bar');
+            const prog = row.querySelector('.job-progress');
+            if (bar) bar.style.width = pct + '%';
+            if (prog) prog.textContent = job.read_bytes + ' / ' + job.total_bytes + ' 字节';
+          }
+        }
+      } catch (e) { /* transient; retry next tick */ }
+    }
+    if (anyRunning) {
+      setTimeout(poll, 1000);
+    } else {
+      // A job just finished: reload so the recovered download link appears.
+      window.location.reload();
+    }
+  }
+  setTimeout(poll, 1000);
+})();
+</script>
 </body>
 </html>

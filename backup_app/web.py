@@ -7,8 +7,10 @@ from flask import (
     Flask,
     abort,
     flash,
+    jsonify,
     redirect,
     render_template,
+    request,
     send_file,
     url_for,
 )
@@ -16,7 +18,12 @@ from io import BytesIO
 
 from .config import config_from_env
 from .db import check_crypto_import
-from .service import KeyRemovalError, RotationInProgress, Service
+from .service import (
+    KeyRemovalError,
+    RecoveryExportError,
+    RotationInProgress,
+    Service,
+)
 from .worker import RotationWorker
 
 log = logging.getLogger(__name__)
@@ -110,6 +117,74 @@ def create_app(config=None) -> Flask:
         except KeyRemovalError as exc:
             flash(str(exc), "error")
         return redirect(url_for("index"))
+
+    # --------------------------------------------------- recovery credentials
+
+    @app.post("/backups/<backup_id>/recovery-credential")
+    def export_credential(backup_id: str):
+        passphrase = request.form.get("passphrase", "")
+        try:
+            download_name, blob = service.export_recovery_credential(
+                backup_id, passphrase
+            )
+        except RecoveryExportError as exc:
+            flash(f"恢复凭据导出失败：{exc}", "error")
+            return redirect(url_for("index"))
+        return send_file(
+            BytesIO(blob),
+            mimetype="application/octet-stream",
+            as_attachment=True,
+            download_name=download_name,
+        )
+
+    @app.route("/recovery/imports", methods=["GET", "POST"])
+    def recovery_imports():
+        if request.method == "GET":
+            return jsonify({"jobs": service.list_recovery_jobs()})
+
+        upload = request.files.get("credential")
+        passphrase = request.form.get("passphrase", "")
+        if upload is None or upload.filename == "":
+            flash("请选择要导入的恢复凭据文件。", "error")
+            return redirect(url_for("index"))
+        if not passphrase:
+            flash("请输入导出凭据时使用的口令。", "error")
+            return redirect(url_for("index"))
+        credential_bytes = upload.read()
+        job_id = service.start_recovery_import(credential_bytes, passphrase)
+        job = service.get_recovery_job(job_id)
+        if job["status"] == "failed":
+            flash(f"凭据校验未通过：{job['error']}", "error")
+        else:
+            flash(
+                f"恢复导入已开始（任务 {job_id[:8]}…），后台流式校验密文，"
+                "可在页面下方查看进度。",
+                "ok",
+            )
+        return redirect(url_for("index"))
+
+    @app.get("/recovery/imports/<job_id>")
+    def get_import(job_id: str):
+        job = service.get_recovery_job(job_id)
+        if job is None:
+            abort(404)
+        return jsonify(job)
+
+    @app.post("/recovery/imports/<job_id>/pause")
+    def pause_import(job_id: str):
+        try:
+            service.pause_recovery_job(job_id)
+        except KeyError:
+            abort(404)
+        return jsonify({"id": job_id, "paused": True})
+
+    @app.post("/recovery/imports/<job_id>/resume")
+    def resume_import(job_id: str):
+        try:
+            service.resume_recovery_job(job_id)
+        except KeyError:
+            abort(404)
+        return jsonify({"id": job_id, "paused": False})
 
     @app.errorhandler(413)
     def too_large(_):

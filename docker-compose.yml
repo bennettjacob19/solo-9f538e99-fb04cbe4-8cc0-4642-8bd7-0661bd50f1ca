@@ -1,0 +1,22 @@
+services:
+  backup-web:
+    build: .
+    image: encrypted-backup:latest
+    ports:
+      - "8000:8000"
+    environment:
+      # Master-key material and SQLite metadata live on this volume.
+      KEYSTORE_DIR: /data/keystore
+      # Ciphertext backup blobs live on this separate volume.
+      VOLUME_DIR: /data/volumes
+      ROTATION_INTERVAL: "1"
+      ROTATION_BATCH: "10"
+      MAX_UPLOAD_MB: "16"
+    volumes:
+      - keystore:/data/keystore
+      - backup-volumes:/data/volumes
+    restart: unless-stopped
+
+volumes:
+  keystore:
+  backup-volumes:
